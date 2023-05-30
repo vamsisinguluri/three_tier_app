@@ -1,0 +1,134 @@
+version: '3.7'
+
+services:
+  userapp1: &userapp1
+    build: ./userservice
+    environment:
+      - APP_STATE=PRIMARY
+      - POSTGRES_PRIMARY_HOST=pg_master
+      - POSTGRES_SECONDARY_HOST=pg_slave
+      - POSTGRES_PORT=5432
+      - POSTGRES_USER=vamsi
+      - POSTGRES_PASSWORD=123456
+      - POSTGRES_DB=vamsi
+    ports:
+      - "5001:5001"
+    command: gunicorn --bind 0.0.0.0:5001 wsgi:app
+    networks:
+      - myappnetwork
+
+  userapp2:
+    <<: *userapp1
+    environment:
+      - APP_STATE=SECONDARY
+      - POSTGRES_PRIMARY_HOST=pg_master
+      - POSTGRES_SECONDARY_HOST=pg_slave
+      - POSTGRES_PORT=5432
+      - POSTGRES_USER=vamsi
+      - POSTGRES_PASSWORD=123456
+      - POSTGRES_DB=vamsi
+    ports:
+      - "5002:5002"
+    command: gunicorn --bind 0.0.0.0:5002 wsgi:app
+    networks:
+      - myappnetwork
+
+  pg_master:
+    build: ./postgres/master
+    volumes:
+      - ./postgres/master/postgres_data:/var/lib/postgresql/data
+      - ./postgres/master/clusterbackup:/tmp/backup
+    environment:
+      - POSTGRES_USER=vamsi
+      - POSTGRES_PASSWORD=123456
+      - POSTGRES_DB=vamsi
+      - PG_REP_USER=replicator
+      - PG_REP_PASSWORD=replicator_password
+    networks:
+      - myappnetwork
+
+  pg_slave:
+    build: ./postgres/slave
+    volumes:
+      - ./postgres/slave/postgres_data:/var/lib/postgresql/data
+      - ./postgres/slave/backupdata:/tmp/postgresslave
+    environment:
+      - POSTGRES_USER=vamsi
+      - POSTGRES_PASSWORD=123456
+      - POSTGRES_DB=vamsi
+      - PG_REP_USER=replicator
+      - PG_REP_PASSWORD=replicator_password
+      - PG_MASTER_HOST=pg_master
+      - PGDATA=/var/lib/postgresql/data/main/
+    networks:
+      - myappnetwork
+
+
+  # the Prometheus server
+  prometheus:
+    container_name: prometheus
+    image: prom/prometheus:v2.2.1
+    restart: 'no'
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - 9090:9090
+    networks:
+      - myappnetwork
+    depends_on:
+      - userapp1
+      - userapp2
+
+
+ # Grafana for visualization
+  grafana:
+    image: grafana/grafana:5.1.0
+    volumes:
+      - ./grafana/config.ini:/etc/grafana/grafana.ini
+      - ./grafana/datasource.yaml:/etc/grafana/provisioning/datasources/default.yaml
+      - ./grafana/dashboard.yaml:/etc/grafana/provisioning/dashboards/default.yaml
+      - ./grafana/dashboards:/var/lib/grafana/dashboards
+    ports:
+      - 3000:3000
+    depends_on:
+      - prometheus
+    networks:
+      - myappnetwork
+
+  nginx:
+    build: ./nginx
+    ports:
+      - "80:80"
+    depends_on:
+      - userapp1
+      - userapp2
+    networks:
+      - myappnetwork
+
+networks:
+  myappnetwork:
+    driver: bridge
+
+
+
+#  pgbackups:
+#    image: prodrigestivill/postgres-backup-local
+#    restart: always
+#    volumes:
+#        - ./postgres/backups:/backups
+##    links:
+##        - postgres
+##    depends_on:
+##        - pg_master
+#    environment:
+#        - POSTGRES_HOST=pg_master
+#        - POSTGRES_DB=vamsi
+#        - POSTGRES_USER=vamsi
+#        - POSTGRES_PASSWORD=123456
+#     #  - POSTGRES_PASSWORD_FILE=/run/secrets/db_password <-- alternative for POSTGRES_PASSWORD (to use with docker secrets)
+#        - POSTGRES_EXTRA_OPTS=-Z6 --schema=public --blobs
+#        - SCHEDULE=@every 60s
+#        - BACKUP_KEEP_DAYS=7
+#    networks:
+#      - myappnetwork
+

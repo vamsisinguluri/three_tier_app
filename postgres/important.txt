@@ -1,0 +1,338 @@
+
+# command to show database files
+
+SHOW data_directory;
+
+
+
+# MASTER SIDE OPERATION
+Inside postgresql.conf
+archive_mode = on
+archive_command = 'test ! -f /var/lib/postgresql/datbase_archive/%f && cp %p /var/lib/postgresql/datbase_archive/%f'
+
+create replication user
+add replication user in pg_hba.conf
+
+
+# SLAVE SIDE OPERATION:
+
+inside postgresql.conf  change restore_command = 'cp /tmp/archive_dir/%f %p'
+promote_trigger_file = '/tmp/failover.log'
+
+
+
+
+
+# REPLICATION USER CREATION
+CREATE USER replicator WITH REPLICATION ENCRYPTED PASSWORD 'replicator_password'
+
+
+
+SELECT * FROM pg_stat_replication ; ( MASTER )
+SELECT * FROM pg_stat_wal_receiver; ( SLAVE )
+
+select pg_is_in_recovery;
+
+One can check the streaming status on Master
+postgres=# select * from pg_stat_activity  where username='replicator';
+application_name |   state   | sync_priority | sync_state
+-----------------+-----------+---------------+------------
+pgslave001       | streaming |             1 | sync
+(1 row)
+
+
+
+# If you want to enable synchronous, the run the below command on master database server and reload postgresql service.
+
+ALTER SYSTEM SET synchronous_standby_names TO  '*';
+
+
+# LIST DATABASE
+ \l
+
+#  SELECT DATABASE
+\c DBNAME
+
+# LIST TABLE SPACE
+\db+
+
+# CREATE TABLE
+CREATE TABLE COMPANY(
+   ID INT PRIMARY KEY     NOT NULL,
+   NAME           TEXT    NOT NULL,
+   AGE            INT     NOT NULL,
+   ADDRESS        CHAR(50),
+   SALARY         REAL
+);
+
+# LIST ALL TABLES
+\d
+
+# DESCRIBE TABLE
+\d COMPANY
+
+select * from company;
+
+# INSERT DATA INTO TABLE
+INSERT INTO COMPANY (ID,NAME,AGE,ADDRESS,SALARY) VALUES (1, 'Paul', 32, 'California', 20000.00);
+INSERT INTO COMPANY (ID,NAME,AGE,ADDRESS,SALARY) VALUES (4, 'bhavya', 25, 'India', 3455.00);
+
+
+
+
+
+
+
+# BACK UP command
+pg_basebackup -h pg_master -p 5432 -U replicator -D /tmp/postgresslave -Fp -Xs -R
+
+BACKUP : pgpg_dump_dump -Fc -h pg_master -U vamsi   vamsi(target dtaabase) -f dbback.dump(file)
+RESTORE: pg_restore -d vamsi(databasename) -h pg_master -U vamsi dbback.dump
+
+
+# COMMAND WHICH SCHEDULER NEED TO RUN FOR EVERY 2 HOURS
+docker exec -t vamsiproject-pg_master-1 bash -c 'pg_basebackup -h localhost -p 5432 -U vamsi -D /tmp/backup/$(date +%Y%m%d%H%M%S) -Ft -z -Xs -P'
+
+
+vamsi=# select name, setting, unit from pg_settings where name like 'archive%';
+          name           |  setting   | unit
+-------------------------+------------+------
+ archive_cleanup_command |            |
+ archive_command         | (disabled) |
+ archive_mode            | off        |
+ archive_timeout         | 0          | s
+(4 rows)
+
+postgres.conf
+
+archive_mode=on
+archive_timeout=300
+archive_command='archive_command | test ! -f /var/lib/postgresql/data/pg_wal/%f && cp %p /var/lib/postgresql/datbase_archive/pg_wal/%f'
+
+
+vamsi=# select name, setting, unit from pg_settings where name like 'archive%';
+          name           |                                                        setting                                                        | unit
+-------------------------+-----------------------------------------------------------------------------------------------------------------------+------
+ archive_cleanup_command |                                                                                                                       |
+ archive_command         | archive_command | test ! -f /var/lib/postgresql/data/pg_wal/%f && cp %p /var/lib/postgresql/datbase_archive/pg_wal/%f |
+ archive_mode            | on                                                                                                                    |
+ archive_timeout         | 300                                                                                                                   | s
+(4 rows)
+
+vamsi=#
+vamsi=# select pg_switch_wal();
+ pg_switch_wal
+---------------
+ 0/31F4A98
+(1 row)
+
+
+pg_basebackup -h localhost -p 5432 -U vamsi -D /tmp/mydata -Ft -z -Xs -P
+
+pg_basebackup -h localhost -p 5432 -U vamsi -D /tmp/backup/$(date +%Y%m%d) -Ft -z -Xs -P
+
+
+
+vamsi=# show config_file;
+               config_file
+------------------------------------------
+ /var/lib/postgresql/data/postgresql.conf
+(1 row)
+
+
+
+
+
+
+
+# PROMOTE STANDBY TO MASTER
+
+
+1. Stop the primary service
+   stop container
+
+2. login to the secondary and promote it to primary ( -D is for the data directory )
+    touch /tmp/failover.log
+
+# Startup primary cluster as replica instance
+3. create standby.signal file  on  primary side
+
+4. update postgres.conf file ( change host to slave in below config)
+
+BEFORE
+primary_conninfo = 'user=replicator passfile=''/root/.pgpass'' channel_binding=prefer host=pg_master port=5432 sslmode=prefer sslcompression=0 sslsni=1 ssl_min_protocol_version=TLSv1.2 gssencmode=prefer krbsrvname=postgres target_session_attrs=any'
+
+AFTER
+primary_conninfo = 'user=replicator passfile=''/root/.pgpass'' channel_binding=prefer host=pg_slave
+
+5. change pg_hba.conf to include both master and slave ip
+
+   host replication replicator 0.0.0.0/0  trust ( do this on both master and slave )
+
+6. start container (  now old master acts as stand by server )
+
+
+
+
+
+good reference:
+https://www.postgresql.fastware.com/postgresql-insider-str-rep-ope
+https://www.postgresql.org/docs/13/warm-standby-failover.html
+https://www.migops.com/blog/setting-up-streaming-replication-in-postgresql-13-and-streaming-replication-internals/
+video: https://www.youtube.com/watch?v=WJJvOGCldDc
+https://www.youtube.com/playlist?list=PL3WN5UzLiADd-sjn-aPVVfBlkXPO9IoG7
+
+
+
+refernece: https://www.enterprisedb.com/postgres-tutorials/how-manage-replication-and-failover-postgres-version-12-without-recoveryconf
+
+
+
+
+
+
+
+
+
+
+# BACKUP
+
+https://severalnines.com/blog/postgresql-replication-disaster-recovery/
+
+
+MATER :
+postgresql.conf -->  archieve_mode=on
+                     archive_command='cp %p /tmp/archive_dir/%f'
+
+pg_basebackup -h pg_master -p 5432 -U replicator -D /tmp/postgresslave -Fp -Xs -R -v
+
+-R command will create an empty file with the name “standby.signal.”
+root@d87013791907:/var/lib/postgresql/data/main# ls -ltr standby.signal
+-rw------- 1 postgres root 0 May 27 18:06 standby.signal
+
+
+
+SLAVE:
+
+old version configuration:
+standby_mode = 'on'  ( NOT SUPPORTED )
+primary_conninfo = 'host=10.0.15.10 port=5432 user=replica password=STRONG_PASSWORD_HERE application_name=pgslave001'
+restore_command = 'cp /var/lib/postgresql/12/main/archive/%f %p'
+trigger_file = '/tmp/postgresql.trigger.5432'
+
+
+
+earlier version used to identify standby with configuration standby_mode='on' on postgresql.conf  file.
+
+promote_trigger_file ( latest version changed from trigger_file -> promote_trigger_file)
+
+
+Perform Failover :
+
+There are multiple ways to do this:
+
+a) Shut down the master and promote standby.
+b) Shut down the master and touch the file that we mentioned in the “promote_trigger_file parameter” of postgresql.conf
+
+
+archive_command = 'test ! -f /var/lib/postgresql/datbase_archive/%f && cp %p /var/lib/postgresql/datbase_archive/%f'
+
+
+# PERFORM POINT IN TIME RECOVERY OF THE DATABASE:
+
+MASTER ( postgres.conf --> archive_command = 'test ! -f /path/to/database_archive/%f && cp %p /path/to/database_archive/%f')
+above command take WAL files backup  you need use these WAL files in step 5.
+
+
+1. STOP MASTER CONTAINER
+2. rm -rf /var/lib/postgresql/data
+3. mkdir /var/lib/postgresql/data
+4. you need to copy all the files from the physical backup you made
+    cp -a /path/to/database_backup/. /var/lib/postgresql/data/
+5. WAL files in the pg_wal directory copied from the physical backup are outdated. need to replace them with the
+WAL files in the pg_wal directory that you copied
+cp -a /path/to/database_archive/ /var/lib/postgresql/data/pg_wal
+
+6. open "postgresql.conf" file and configure restore_command command:you need to specify how PostgreSQL should
+recover the WAL files. Since the archive command just copies the files to the archive, the restore command will copy the files back.
+    restore_command = 'cp /path/to/database_archive/%f %p'
+
+
+
+
+
+
+#   PG_CRON
+
+1.  inside postgres.conf update below:
+
+    shared_preload_libraries = 'pg_cron'
+    cron.database_name = 'vamsi'
+
+2. restart container
+
+3. create extension
+
+vamsi=# CREATE EXTENSION pg_cron;
+CREATE EXTENSION
+vamsi=#
+vamsi=# GRANT USAGE ON SCHEMA cron TO vamsi;
+GRANT
+
+postgres=> SELECT * FROM cron.job;
+
+SELECT * FROM cron.job_run_details where jobid=9;
+
+
+4. SELECT cron.schedule('*/2 * * * *', $$pg_basebackup -h localhost -p 5432 -U vamsi -D /tmp/backup/$(date +%Y%m%d) -Ft -z -Xs -P'$$);
+
+SELECT cron.schedule('*/2 * * * *', $$pg_dump > /tmp/backup/all.sql'$$);
+
+
+
+5. to unshcedule :
+
+SELECT cron.unschedule(6) FROM cron.job;
+
+select cron.unschedule(6) from cron.job;
+
+
+
+pg_basebackup -h localhost -p 5432 -U vamsi -D /tmp/backup/$(date +%Y%m%d) -Ft -z -Xs -P
+
+
+
+
+
+
+
+
+
+
+
+
+# BAKCUP SCRIPT :https://bobcares.com/blog/postgres-docker-backup-cron/
+
+
+
+# MASTER:
+
+wal_level = replica
+max_wal_senders = 3 # max number of walsender processes
+wal_keep_segments = 64 # in logfile segments, 16MB each; 0 disables
+listen_addresses = '*'
+# or listen_address = ‘IP_OF_SERVER’
+archive_mode = on
+archive_command = 'cp %p /var/lib/postgresql/12/main/archive/%f'
+synchronous_commit = local
+synchronous_standby_names = 'pgslave001'
+
+# recovery.conf on standby:
+standby_mode = 'on'
+primary_conninfo = 'host=10.0.15.10 port=5432 user=replica password=STRONG_PASSWORD_HERE application_name=pgslave001'
+restore_command = 'cp /var/lib/postgresql/12/main/archive/%f %p'
+trigger_file = '/tmp/postgresql.trigger.5432'
+promote_trigger_file ( latest version changed from trigger_file -> promote_trigger_file)
+
+“standby.signal”—which is an empty file—has replaced the recovery.conf file and the presence of this file will signal to the cluster to run in standby mode.
+
